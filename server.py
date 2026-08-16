@@ -746,10 +746,11 @@ async def send_support(payload: MessageInput, user: User = Depends(get_current_u
 app.include_router(api_router)
 
 app.add_middleware(
-    SessionMiddleware,
-    secret_key=JWT_SECRET,
-    https_only=True,
-    same_site="lax",
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 logging.basicConfig(level=logging.INFO,
