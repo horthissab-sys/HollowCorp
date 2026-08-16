@@ -441,6 +441,7 @@ async def auth_me(user: User = Depends(get_current_user)):
 
 @api_router.get("/auth/google")
 async def google_login(request: Request):
+    # URL de callback enregistrée dans Google Cloud
     redirect_uri = os.environ["GOOGLE_REDIRECT_URI"]
 
     return await oauth.google.authorize_redirect(
@@ -486,7 +487,6 @@ async def google_callback(request: Request):
             user_id = existing["user_id"]
             role = existing.get("role", "client")
 
-            # Mise à jour des informations Google
             await db.users.update_one(
                 {"user_id": user_id},
                 {
@@ -497,7 +497,6 @@ async def google_callback(request: Request):
                 },
             )
 
-        # Création d'un nouveau compte Google
         else:
             user_id = f"user_{uuid.uuid4().hex[:12]}"
             role = "client"
@@ -518,7 +517,7 @@ async def google_callback(request: Request):
             role,
         )
 
-        # Création de la réponse de redirection
+        # Redirection vers l'espace client
         redirect_response = RedirectResponse(
             url="https://hollowcorp.fr/espace-client",
             status_code=302,
@@ -535,7 +534,6 @@ async def google_callback(request: Request):
             max_age=7 * 24 * 60 * 60,
         )
 
-        # Retour vers l'espace client
         return redirect_response
 
     except HTTPException:
@@ -548,7 +546,6 @@ async def google_callback(request: Request):
             status_code=401,
             detail="Échec de la connexion Google",
         )
-
 
 # ==================== ADMIN: rotating code login ====================
 @api_router.post("/admin/request-code")
