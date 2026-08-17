@@ -437,12 +437,12 @@ async def auth_me(user: User = Depends(get_current_user)):
     return user
 
 
+
 # ==================== AUTH: GOOGLE ====================
 
 @api_router.get("/auth/google")
 async def google_login(request: Request):
-    # URL de callback enregistrée dans Google Cloud
-    redirect_uri = os.environ["GOOGLE_REDIRECT_URI"]
+    redirect_uri = "https://api.private.hollowcorp.fr/api/auth/google/callback"
 
     return await oauth.google.authorize_redirect(
         request,
@@ -546,6 +546,7 @@ async def google_callback(request: Request):
             status_code=401,
             detail="Échec de la connexion Google",
         )
+
 
 # ==================== ADMIN: rotating code login ====================
 @api_router.post("/admin/request-code")
