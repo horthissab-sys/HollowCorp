@@ -36,6 +36,13 @@ app = FastAPI()
 api_router = APIRouter(prefix="/api")
 logger = logging.getLogger(__name__)
 
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.environ["SESSION_SECRET"],
+    same_site="lax",
+    https_only=True,
+)
+
 # ---- Config ----
 EMAIL_FROM_NAME = os.environ["EMAIL_FROM_NAME"]
 OWNER_EMAIL = os.environ["OWNER_EMAIL"]
