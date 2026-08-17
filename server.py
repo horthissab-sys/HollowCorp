@@ -36,13 +36,6 @@ app = FastAPI()
 api_router = APIRouter(prefix="/api")
 logger = logging.getLogger(__name__)
 
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=os.environ["SESSION_SECRET"],
-    same_site="lax",
-    https_only=True,
-)
-
 # ---- Config ----
 EMAIL_FROM_NAME = os.environ["EMAIL_FROM_NAME"]
 OWNER_EMAIL = os.environ["OWNER_EMAIL"]
@@ -753,12 +746,21 @@ async def send_support(payload: MessageInput, user: User = Depends(get_current_u
 app.include_router(api_router)
 
 app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.environ["SESSION_SECRET"],
+    same_site="lax",
+    https_only=True,
+)
+
+app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
     allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
