@@ -1,6 +1,7 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, Header
 from starlette.responses import RedirectResponse
 from starlette.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
@@ -11,8 +12,10 @@ from html import escape
 from html.parser import HTMLParser
 from urllib.parse import urlparse
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 from datetime import datetime, timezone, timedelta
+from collections import defaultdict
+from time import time
 
 import os
 import re
@@ -43,8 +46,28 @@ EMAIL_REPLY_TO = os.environ.get("EMAIL_REPLY_TO")
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGORITHM = "HS256"
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "Admin")
-EMERGENT_AUTH_URL = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://hollowcorp.fr").rstrip("/")
 resend.api_key = os.environ["RESEND_API_KEY"]
+
+_rate_buckets: Dict[str, List[float]] = defaultdict(list)
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def rate_limit(request: Request, key: str, limit: int, window_sec: int) -> None:
+    ip = _client_ip(request)
+    now = time()
+    bucket = f"{key}:{ip}"
+    hits = [t for t in _rate_buckets[bucket] if now - t < window_sec]
+    if len(hits) >= limit:
+        raise HTTPException(status_code=429, detail="Trop de requêtes. Réessayez plus tard.")
+    hits.append(now)
+    _rate_buckets[bucket] = hits
 
 # ==================== GOOGLE OAUTH ====================
 
@@ -340,8 +363,14 @@ async def root():
     return {"message": "HollowCorp API"}
 
 
+@api_router.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
 @api_router.post("/contact")
 async def create_contact(payload: ContactCreate, request: Request, authorization: Optional[str] = Header(None)):
+    rate_limit(request, "contact", 5, 3600)
     # Link the request to the logged-in user (if any) so they can track it in their space
     owner_id = None
     try:
@@ -517,23 +546,11 @@ async def google_callback(request: Request):
             role,
         )
 
-        # Redirection vers l'espace client
         redirect_response = RedirectResponse(
-            url="https://hollowcorp.fr/espace-client",
+            url=f"{FRONTEND_URL}/fr/espace-client",
             status_code=302,
         )
-
-        # Cookie de connexion
-        redirect_response.set_cookie(
-            key="access_token",
-            value=access_token,
-            httponly=True,
-            secure=True,
-            samesite="lax",
-            path="/",
-            max_age=7 * 24 * 60 * 60,
-        )
-
+        set_jwt_cookie(redirect_response, access_token)
         return redirect_response
 
     except HTTPException:
@@ -549,7 +566,8 @@ async def google_callback(request: Request):
 
 # ==================== ADMIN: rotating code login ====================
 @api_router.post("/admin/request-code")
-async def request_admin_code():
+async def request_admin_code(request: Request):
+    rate_limit(request, "admin-code", 3, 3600)
     code = f"{secrets.randbelow(1000000):06d}"
     await db.admin_codes.insert_one({
         "code": code, "used": False,
@@ -745,11 +763,19 @@ async def send_support(payload: MessageInput, user: User = Depends(get_current_u
 
 app.include_router(api_router)
 
+_cors_origins = [
+    origin.strip()
+    for origin in os.environ.get("CORS_ORIGINS", f"{FRONTEND_URL},http://localhost:3000").split(",")
+    if origin.strip() and origin.strip() != "*"
+] or [FRONTEND_URL]
+
+app.add_middleware(GZipMiddleware, minimum_size=500)
+app.add_middleware(SessionMiddleware, secret_key=JWT_SECRET, same_site="lax", https_only=True, max_age=3600)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
-    allow_methods=["*"],
+    allow_origins=_cors_origins,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 logging.basicConfig(level=logging.INFO,
@@ -760,6 +786,14 @@ logging.basicConfig(level=logging.INFO,
 async def startup():
     await db.users.create_index("email", unique=True)
     await db.users.create_index("user_id", unique=True)
+    await db.contacts.create_index("id", unique=True)
+    await db.contacts.create_index("created_at")
+    await db.contacts.create_index("email")
+    await db.contacts.create_index("owner_id")
+    await db.support_messages.create_index([("owner_id", 1), ("created_at", 1)])
+    await db.admin_codes.create_index("code")
+    await db.admin_codes.create_index("expires_at")
+    await db.user_sessions.create_index("session_token")
     # Migrate any legacy "admin" role to "ceo"
     await db.users.update_many({"role": "admin"}, {"$set": {"role": "ceo"}})
     ceo = await db.users.find_one({"role": "ceo"})
